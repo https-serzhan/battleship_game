@@ -26,6 +26,15 @@ export interface BoardShot extends CellCoord {
   result: ShotResult
 }
 
+export interface MoveRecord extends CellCoord {
+  id: number
+  gameId: number
+  turnNumber: number
+  playerId: number
+  result: ShotResult
+  createdAt: string
+}
+
 export interface LobbyGame {
   id: number
   creatorDisplayName: string
@@ -55,6 +64,7 @@ export interface GameView {
   currentTurnPlayerId: number | null
   winnerPlayerId: number | null
   players: GamePlayerView[]
+  moves: MoveRecord[]
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
@@ -105,6 +115,7 @@ export interface BackendGameView {
   currentTurnPlayerId: number | null
   winnerPlayerId: number | null
   players: BackendGameParticipant[]
+  moves?: MoveRecord[]
   createdAt: string
   startedAt: string | null
   finishedAt: string | null

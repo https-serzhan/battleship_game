@@ -35,8 +35,24 @@ const GameRoomPage = ({
     game.players.find((participant) => participant.playerId === game.winnerPlayerId)
       ?.displayName ?? null
   const canFire = game.status === 'in_progress' && game.currentTurnPlayerId === player.id
+  const finishedByForfeit =
+    game.status === 'finished' &&
+    Boolean(game.winnerPlayerId) &&
+    !game.moves.some((move) => move.result === 'win')
+  const resultMessage =
+    game.status === 'finished' && game.winnerPlayerId
+      ? finishedByForfeit
+        ? game.winnerPlayerId === player.id
+          ? 'Opponent left the game. You win by forfeit.'
+          : 'You left the game. You forfeited.'
+        : game.winnerPlayerId === player.id
+          ? 'You won.'
+          : 'You lost.'
+      : null
   const statusLabel =
-    game.status === 'setup'
+    game.status === 'waiting'
+      ? 'Waiting'
+      : game.status === 'setup'
       ? 'Setup'
       : game.status === 'finished'
         ? 'Finished'
@@ -72,7 +88,7 @@ const GameRoomPage = ({
                 </Button>
               ) : null}
               <Button variant="ghost" onClick={() => onLeaveGame(game.id)}>
-                Leave game
+                {game.status === 'finished' ? 'Back to lobby' : 'Leave game'}
               </Button>
             </div>
           </div>
@@ -84,27 +100,46 @@ const GameRoomPage = ({
         ) : null}
         {game.status === 'finished' && winnerName ? (
           <div className="rounded-xl border border-[#b7102a]/30 bg-white px-4 py-3 text-sm text-[#191c1d] shadow-[0_12px_30px_rgba(25,28,29,0.04)]">
-            Winner: <span className="font-semibold text-[#b7102a]">{winnerName}</span>
+            <span className="font-semibold text-[#b7102a]">{resultMessage}</span>{' '}
+            Winner: <span className="font-semibold text-[#191c1d]">{winnerName}</span>
           </div>
         ) : null}
         <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
           <div className="grid gap-5 lg:grid-cols-2">
             {ownPlayer ? (
-              <Card className="space-y-4 p-5">
+              <Card
+                className={
+                  game.status === 'setup'
+                    ? 'space-y-4 p-5 lg:col-span-2'
+                    : 'space-y-4 p-5'
+                }
+              >
                 <div>
                   <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-[#747878]">
-                    Own Fleet
+                    {game.status === 'setup' ? 'Fleet Setup' : 'Own Fleet'}
                   </p>
                   <h2 className="mt-1 text-xl font-semibold text-[#191c1d]">
                     {ownPlayer.displayName}
                   </h2>
                 </div>
-                <GameBoard
-                  gridSize={game.gridSize}
-                  ships={ownPlayer.ships}
-                  shots={ownPlayer.shots}
-                  mode="own"
-                />
+                {game.status === 'setup' ? (
+                  <ShipPlacementControls
+                    key={`${game.id}-${ownPlayer.ready ? 'ready' : 'setup'}-${ownPlayer.ships.length}`}
+                    gameId={game.id}
+                    gridSize={game.gridSize}
+                    shipConfig={game.shipConfig}
+                    initialShips={ownPlayer.ships}
+                    ready={ownPlayer.ready}
+                    onPlaceShips={onPlaceShips}
+                  />
+                ) : (
+                  <GameBoard
+                    gridSize={game.gridSize}
+                    ships={ownPlayer.ships}
+                    shots={ownPlayer.shots}
+                    mode="own"
+                  />
+                )}
               </Card>
             ) : null}
             {opponent ? (
@@ -169,19 +204,18 @@ const GameRoomPage = ({
                     Setup
                   </p>
                   <h2 className="mt-1 text-xl font-semibold text-[#191c1d]">
-                    Fleet placement
+                    Readiness
                   </h2>
                 </div>
                 <p className="text-sm leading-6 text-[#444748]">
-                  Auto-placement proposes a valid fleet to the server. The backend validates
-                  all cells before the game can start.
+                  Place every ship and press Ready. The backend validates the final layout
+                  before the match can start.
                 </p>
-                <ShipPlacementControls
-                  gameId={game.id}
-                  gridSize={game.gridSize}
-                  shipConfig={game.shipConfig}
-                  onPlaceShips={onPlaceShips}
-                />
+                {ownPlayer.ready ? (
+                  <div className="rounded-lg border border-[#c4c7c7] bg-[#f3f4f5] px-3 py-2 text-sm text-[#444748]">
+                    Your fleet is ready. Waiting for the opponent.
+                  </div>
+                ) : null}
               </Card>
             ) : null}
           </aside>

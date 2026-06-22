@@ -65,8 +65,17 @@ const App = () => {
     }
 
     const handleGameUpdated = (payload: GameUpdatedPayload) => {
-      setActiveGame(toGameView(payload.game))
+      const game = toGameView(payload.game)
+      setActiveGame(game)
       setErrorMessage(null)
+
+      if (game.status === 'finished') {
+        const token = getSessionToken()
+
+        if (token) {
+          socket.emit('join-platform', { sessionToken: token })
+        }
+      }
     }
 
     const handleError = (payload: ErrorMessagePayload) => {
@@ -125,9 +134,18 @@ const App = () => {
   }
 
   const leaveGame = (gameId: number) => {
+    const leavingGame = activeGame?.id === gameId ? activeGame : null
+
     socket.emit('leave-game', { gameId })
-    setActiveGame(null)
     setShowReplay(false)
+
+    if (
+      !leavingGame ||
+      leavingGame.status === 'waiting' ||
+      leavingGame.status === 'finished'
+    ) {
+      setActiveGame(null)
+    }
   }
 
   const resetSession = () => {

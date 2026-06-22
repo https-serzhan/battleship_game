@@ -19,6 +19,8 @@ export const FireShotHandler = ({
     ships={opponent.ships}
     shots={opponent.shots}
     mode="opponent"
+    disabled={!canFire}
+    isCurrentTurn={canFire}
     onCellClick={canFire ? (cell) => onFire(cell.x, cell.y) : undefined}
   />
 )

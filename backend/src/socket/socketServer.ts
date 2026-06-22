@@ -6,6 +6,7 @@ import {
   getGameForPlayer,
   getLiveGameIdsForPlayer,
   joinGame,
+  leaveGame as leaveGameService,
   listLobbyGames,
   placeShips,
 } from "../services/gameService";
@@ -212,10 +213,17 @@ export const registerSocketServer = (io: Server): void => {
       emitLobby(io);
     });
 
-    bind(socket, clientEvents.leaveGame, (payload) => {
+    bind(socket, clientEvents.leaveGame, async (payload) => {
+      const playerId = requirePlayerId(socket);
       const input = leaveGameSchema.parse(payload);
+      const outcome = leaveGameService(input.gameId, playerId);
+
+      if (outcome.kind === "forfeit") {
+        await emitGameToRoom(io, input.gameId);
+      }
 
       socket.leave(gameRoom(input.gameId));
+      emitLobby(io);
     });
 
     socket.on("disconnect", () => {

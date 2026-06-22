@@ -316,7 +316,62 @@ const run = async (): Promise<void> => {
       "restored client A should not see B ships",
     );
 
-    console.log("Socket smoke test passed, including active game reconnect restore.");
+    const forfeitUpdateA = waitForGameUpdate(
+      clientA,
+      "client A sees B forfeit",
+    );
+    const forfeitUpdateB = waitForGameUpdate(
+      clientB,
+      "client B leave-game forfeit",
+    );
+
+    clientB.emit("leave-game", { gameId });
+
+    const [afterForfeitA, afterForfeitB] = await Promise.all([
+      forfeitUpdateA,
+      forfeitUpdateB,
+    ]);
+
+    assert(
+      afterForfeitA.game.status === "finished",
+      "client A should see finished game after B leaves",
+    );
+    assert(
+      afterForfeitA.game.winnerPlayerId === joinedA.player.id,
+      "client A should win when B forfeits",
+    );
+    assert(
+      afterForfeitB.game.winnerPlayerId !== joinedB.player.id,
+      "client B should not win after forfeiting",
+    );
+
+    clientB.emit("leave-game", { gameId });
+
+    const statsAfterForfeitA = await joinPlatform(
+      clientA,
+      { sessionToken: joinedA.sessionToken },
+      "client A stats after forfeit",
+    );
+    const statsAfterForfeitB = await joinPlatform(
+      clientB,
+      { sessionToken: joinedB.sessionToken },
+      "client B stats after forfeit",
+    );
+
+    assert(
+      statsAfterForfeitA.stats.gamesPlayed === 1 &&
+        statsAfterForfeitA.stats.wins === 1,
+      "client A stats should count one win",
+    );
+    assert(
+      statsAfterForfeitB.stats.gamesPlayed === 1 &&
+        statsAfterForfeitB.stats.losses === 1,
+      "client B stats should count one loss",
+    );
+
+    console.log(
+      "Socket smoke test passed, including reconnect restore and leave-game forfeit.",
+    );
   } finally {
     clientA?.disconnect();
     clientB?.disconnect();

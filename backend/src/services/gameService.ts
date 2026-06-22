@@ -624,3 +624,99 @@ export const fireShot = (
 
   return getGameForPlayer(gameId, playerId);
 };
+
+export type LeaveGameOutcome =
+  | {
+      kind: "cancelled";
+      gameId: number;
+      participantIds: number[];
+    }
+  | {
+      kind: "forfeit";
+      gameId: number;
+      participantIds: number[];
+      winnerPlayerId: number;
+      loserPlayerId: number;
+    }
+  | {
+      kind: "left";
+      gameId: number;
+      participantIds: number[];
+    };
+
+export const leaveGame = (
+  gameId: number,
+  playerId: number,
+): LeaveGameOutcome => {
+  const db = getDatabase();
+
+  const transaction = db.transaction((): LeaveGameOutcome => {
+    const game = getGameRow(gameId);
+    const players = getGamePlayers(gameId);
+    const leavingPlayer = players.find(
+      (player) => player.player_id === playerId,
+    );
+
+    if (!leavingPlayer) {
+      throw new Error("Player is not in this game");
+    }
+
+    const participantIds = players.map((player) => player.player_id);
+
+    if (game.status === "waiting") {
+      if (game.creator_player_id !== playerId) {
+        throw new Error("Only the creator can cancel a waiting game");
+      }
+
+      db.prepare<[number]>("DELETE FROM games WHERE id = ?").run(gameId);
+
+      return {
+        kind: "cancelled",
+        gameId,
+        participantIds,
+      };
+    }
+
+    if (game.status === "finished") {
+      return {
+        kind: "left",
+        gameId,
+        participantIds,
+      };
+    }
+
+    const remainingPlayer = players.find(
+      (player) => player.player_id !== playerId,
+    );
+
+    if (!remainingPlayer) {
+      throw new Error("Opponent not found");
+    }
+
+    const result = db.prepare<[number, number]>(
+      `
+        UPDATE games
+        SET status = 'finished',
+            winner_player_id = ?,
+            current_turn_player_id = NULL,
+            finished_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND status != 'finished'
+      `,
+    ).run(remainingPlayer.player_id, gameId);
+
+    if (result.changes > 0) {
+      recordGameResult(remainingPlayer.player_id, playerId);
+    }
+
+    return {
+      kind: "forfeit",
+      gameId,
+      participantIds,
+      winnerPlayerId: remainingPlayer.player_id,
+      loserPlayerId: playerId,
+    };
+  });
+
+  return transaction();
+};
