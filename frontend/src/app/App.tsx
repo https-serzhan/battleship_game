@@ -171,7 +171,11 @@ const App = () => {
           errorMessage={errorMessage}
         />
       ) : activeGame && showReplay ? (
-        <ReplayPage game={activeGame} onBack={() => setShowReplay(false)} />
+        <ReplayPage
+          key={activeGame.id}
+          gameId={activeGame.id}
+          onBackToLobby={() => leaveGame(activeGame.id)}
+        />
       ) : activeGame ? (
         <GameRoomPage
           player={player}

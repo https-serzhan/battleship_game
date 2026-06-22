@@ -76,7 +76,11 @@ const LobbyPage = ({
       </section>
       <div className="grid gap-5 lg:grid-cols-[390px_1fr]">
         <CreateGamePanel onCreateGame={onCreateGame} />
-        <GameList games={games} onJoinGame={onJoinGame} />
+        <GameList
+          games={games}
+          currentPlayerId={player.id}
+          onJoinGame={onJoinGame}
+        />
       </div>
     </div>
   </main>

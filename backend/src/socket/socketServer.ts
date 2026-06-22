@@ -5,6 +5,7 @@ import {
   fireShot,
   getGameForPlayer,
   getLiveGameIdsForPlayer,
+  getReplayData,
   joinGame,
   leaveGame as leaveGameService,
   listLobbyGames,
@@ -30,7 +31,7 @@ const joinPlatformSchema = z.object({
     .max(40)
     .optional()
     .transform((value) => (value && value.length > 0 ? value : undefined)),
-  sessionToken: z.string().uuid().optional(),
+  sessionToken: z.string().trim().min(1).max(120).optional(),
 }).refine((payload) => payload.name || payload.sessionToken, {
   message: "Name or session token is required",
 });
@@ -73,6 +74,10 @@ const fireSchema = z.object({
 });
 
 const leaveGameSchema = z.object({
+  gameId: z.number().int().positive(),
+});
+
+const getReplaySchema = z.object({
   gameId: z.number().int().positive(),
 });
 
@@ -224,6 +229,14 @@ export const registerSocketServer = (io: Server): void => {
 
       socket.leave(gameRoom(input.gameId));
       emitLobby(io);
+    });
+
+    bind(socket, clientEvents.getReplay, (payload) => {
+      const playerId = requirePlayerId(socket);
+      const input = getReplaySchema.parse(payload);
+      const replay = getReplayData(input.gameId, playerId);
+
+      socket.emit(serverEvents.replayData, { replay });
     });
 
     socket.on("disconnect", () => {

@@ -2,7 +2,7 @@ import type { Cell, ShotRecord } from "./types";
 
 const keyFor = (cell: Cell): string => `${cell.x}:${cell.y}`;
 
-export const randomShot = (
+export const chooseComputerShot = (
   gridSize: number,
   previousShots: ShotRecord[],
 ): Cell => {
@@ -25,3 +25,5 @@ export const randomShot = (
 
   return available[Math.floor(Math.random() * available.length)];
 };
+
+export const randomShot = chooseComputerShot;

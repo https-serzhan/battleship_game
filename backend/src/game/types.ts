@@ -112,3 +112,32 @@ export interface ReplayEvent {
   result: ShotResult;
   createdAt: string;
 }
+
+export interface ReplayData {
+  game: {
+    id: number;
+    gridSize: number;
+    mode: GameMode;
+    status: "finished";
+    winnerPlayerId: number | null;
+    createdAt: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+  };
+  players: Array<{
+    playerId: number;
+    displayName: string;
+    role: PlayerRole;
+    ships: Ship[];
+  }>;
+  moves: Array<{
+    id: number;
+    turnNumber: number;
+    playerId: number;
+    displayName: string;
+    x: number;
+    y: number;
+    result: ShotResult;
+    createdAt: string;
+  }>;
+}

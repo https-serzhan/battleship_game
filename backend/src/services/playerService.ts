@@ -62,6 +62,14 @@ const getPlayerBySessionToken = (sessionToken: string): Player | null => {
   return row ? mapPlayer(row) : null;
 };
 
+const getPlayerByDisplayName = (displayName: string): Player | null => {
+  const row = getDatabase()
+    .prepare<[string], PlayerRow>("SELECT * FROM players WHERE display_name = ?")
+    .get(displayName);
+
+  return row ? mapPlayer(row) : null;
+};
+
 export const createPlayerWithUniqueDisplayName = (baseName: string): Player => {
   const db = getDatabase();
   const normalized = normalizeBaseName(baseName);
@@ -94,6 +102,55 @@ export const createPlayerWithUniqueDisplayName = (baseName: string): Player => {
 
       suffix += 1;
     }
+  });
+
+  return transaction();
+};
+
+export const getOrCreateComputerPlayer = (): Player => {
+  const db = getDatabase();
+  const sessionToken = "computer-player";
+
+  const transaction = db.transaction((): Player => {
+    const byToken = getPlayerBySessionToken(sessionToken);
+
+    if (byToken) {
+      ensureStats(byToken.id);
+      return byToken;
+    }
+
+    const byName = getPlayerByDisplayName("Computer");
+
+    if (byName) {
+      db.prepare<[string, string, string, number]>(
+        `
+          UPDATE players
+          SET base_name = ?,
+              display_name = ?,
+              session_token = ?,
+              last_seen_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+      ).run("Computer", "Computer", sessionToken, byName.id);
+
+      ensureStats(byName.id);
+      return loadPlayer(byName.id);
+    }
+
+    const result = db
+      .prepare<[string, string, string]>(
+        `
+          INSERT INTO players (base_name, display_name, session_token)
+          VALUES (?, ?, ?)
+        `,
+      )
+      .run("Computer", "Computer", sessionToken);
+
+    const playerId = Number(result.lastInsertRowid);
+
+    ensureStats(playerId);
+
+    return loadPlayer(playerId);
   });
 
   return transaction();

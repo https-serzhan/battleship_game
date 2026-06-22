@@ -25,6 +25,7 @@ const getParticipantDisplayName = (participant: BackendGameParticipant): string 
 
 export const toLobbyGame = (game: BackendLobbyGame): LobbyGame => ({
   id: game.id,
+  creatorId: game.creatorId ?? game.creator?.id ?? null,
   creatorDisplayName: game.creatorDisplayName ?? game.creator?.displayName ?? 'Unknown',
   status: game.status,
   gridSize: game.gridSize,

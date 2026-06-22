@@ -37,6 +37,7 @@ export interface MoveRecord extends CellCoord {
 
 export interface LobbyGame {
   id: number
+  creatorId: number | null
   creatorDisplayName: string
   status: GameStatus
   gridSize: number
@@ -77,8 +78,10 @@ export interface BackendLobbyGame {
   gridSize: number
   shipConfig: ShipConfigItem[]
   creator?: {
+    id?: number
     displayName: string
   }
+  creatorId?: number
   creatorDisplayName?: string
   createdAt: string
 }
@@ -144,4 +147,39 @@ export interface CreateGamePayload {
   gridSize: number
   shipConfig: ShipConfigItem[]
   mode: GameMode
+}
+
+export interface ReplayMove extends CellCoord {
+  id: number
+  turnNumber: number
+  playerId: number
+  displayName: string
+  result: ShotResult
+  createdAt: string
+}
+
+export interface ReplayPlayer {
+  playerId: number
+  displayName: string
+  role: PlayerRole
+  ships: Ship[]
+}
+
+export interface ReplayData {
+  game: {
+    id: number
+    gridSize: number
+    mode: GameMode
+    status: 'finished'
+    winnerPlayerId: number | null
+    createdAt: string
+    startedAt: string | null
+    finishedAt: string | null
+  }
+  players: ReplayPlayer[]
+  moves: ReplayMove[]
+}
+
+export interface ReplayDataPayload {
+  replay: ReplayData
 }

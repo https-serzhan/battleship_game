@@ -1,5 +1,19 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import Database from "better-sqlite3";
 import { io as createClient, type Socket } from "socket.io-client";
-import type { GameView, LobbyGame, PlayerStats } from "../game/types";
+import type {
+  Cell,
+  GameView,
+  LobbyGame,
+  PlayerRole,
+  PlayerStats,
+  ReplayData,
+  Ship,
+} from "../game/types";
 
 interface JoinedPlayer {
   id: number;
@@ -18,17 +32,156 @@ interface GameUpdatedPayload {
   game: GameView;
 }
 
+interface ReplayDataPayload {
+  replay: ReplayData;
+}
+
 interface ErrorPayload {
   message: string;
 }
 
-const serverUrl = process.env.SMOKE_URL ?? "http://localhost:3001";
-const timeoutMs = 6000;
+interface ShipRow {
+  player_id: number;
+  role: PlayerRole;
+  ships_json: string;
+}
 
-const assert = (condition: unknown, message: string): void => {
+interface SmokeServer {
+  url: string;
+  dbPath: string | null;
+  stop: () => Promise<void>;
+}
+
+const timeoutMs = 8000;
+let serverUrl = process.env.SMOKE_URL ?? "";
+
+function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const getFreePort = (): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const server = net.createServer();
+
+    server.once("error", reject);
+    server.listen(0, () => {
+      const address = server.address();
+
+      if (!address || typeof address === "string") {
+        server.close();
+        reject(new Error("Unable to allocate smoke test port"));
+        return;
+      }
+
+      const { port } = address;
+
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(port);
+      });
+    });
+  });
+
+const waitForHealth = async (
+  url: string,
+  child: ChildProcess,
+  logs: string[],
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(
+        `Smoke backend exited early with code ${child.exitCode}:\n${logs.join("")}`,
+      );
+    }
+
+    try {
+      const response = await fetch(`${url}/health`);
+
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      await sleep(150);
+    }
+  }
+
+  throw new Error(`Smoke backend did not become healthy:\n${logs.join("")}`);
+};
+
+const removeSmokeDatabase = (dbPath: string): void => {
+  for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    fs.rmSync(filePath, { force: true });
+  }
+};
+
+const startSmokeServer = async (): Promise<SmokeServer> => {
+  if (process.env.SMOKE_URL) {
+    return {
+      url: process.env.SMOKE_URL,
+      dbPath: process.env.DB_PATH ?? null,
+      stop: async () => undefined,
+    };
+  }
+
+  const port = await getFreePort();
+  const dbPath = path.join(
+    os.tmpdir(),
+    `battleship-smoke-${process.pid}-${Date.now()}.db`,
+  );
+  const url = `http://localhost:${port}`;
+  const logs: string[] = [];
+  const child = spawn(
+    process.execPath,
+    ["-r", "ts-node/register", "src/index.ts"],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        DB_PATH: dbPath,
+        FRONTEND_URL: "http://localhost:5173",
+        PORT: String(port),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    logs.push(chunk.toString());
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    logs.push(chunk.toString());
+  });
+
+  await waitForHealth(url, child, logs);
+
+  return {
+    url,
+    dbPath,
+    stop: async () => {
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+        await new Promise<void>((resolve) => {
+          child.once("exit", () => resolve());
+          setTimeout(resolve, 1500);
+        });
+      }
+
+      removeSmokeDatabase(dbPath);
+    },
+  };
 };
 
 const waitForEvent = <T>(
@@ -62,6 +215,29 @@ const waitForEvent = <T>(
     socket.once("error-message", onError);
   });
 
+const waitForError = (
+  socket: Socket,
+  label: string,
+): Promise<ErrorPayload> =>
+  new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} timed out waiting for error-message`));
+    }, timeoutMs);
+
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      socket.off("error-message", onError);
+    };
+
+    const onError = (payload: ErrorPayload): void => {
+      cleanup();
+      resolve(payload);
+    };
+
+    socket.once("error-message", onError);
+  });
+
 const connectClient = (label: string): Promise<Socket> =>
   new Promise((resolve, reject) => {
     const socket = createClient(serverUrl, {
@@ -84,9 +260,6 @@ const connectClient = (label: string): Promise<Socket> =>
 
     const onConnect = (): void => {
       cleanup();
-      socket.on("error-message", (payload: ErrorPayload) => {
-        console.error(`[${label}] error-message: ${payload.message}`);
-      });
       resolve(socket);
     };
 
@@ -122,6 +295,18 @@ const waitForGameUpdate = (
 ): Promise<GameUpdatedPayload> =>
   waitForEvent<GameUpdatedPayload>(socket, "game-updated", label);
 
+const requestReplay = (
+  socket: Socket,
+  gameId: number,
+  label: string,
+): Promise<ReplayDataPayload> => {
+  const replay = waitForEvent<ReplayDataPayload>(socket, "replay-data", label);
+
+  socket.emit("get-replay", { gameId });
+
+  return replay;
+};
+
 const opponentShipsAreHidden = (game: GameView, viewerId: number): boolean =>
   game.players
     .filter((participant) => participant.player.id !== viewerId)
@@ -135,9 +320,66 @@ const ownShipsAreVisible = (game: GameView, viewerId: number): boolean => {
   return Boolean(viewer && viewer.board.ships.length > 0);
 };
 
+const rolePlayerId = (game: GameView, role: PlayerRole): number => {
+  const participant = game.players.find((player) => player.role === role);
+
+  if (!participant) {
+    throw new Error(`Role ${role} player not found`);
+  }
+
+  return participant.player.id;
+};
+
+const readShipsFromDb = (
+  dbPath: string,
+  gameId: number,
+  role: PlayerRole,
+): Ship[] => {
+  const db = new Database(dbPath, { readonly: true });
+
+  try {
+    const row = db
+      .prepare<[number, PlayerRole], ShipRow>(
+        "SELECT * FROM game_players WHERE game_id = ? AND role = ?",
+      )
+      .get(gameId, role);
+
+    if (!row) {
+      throw new Error(`Unable to read role ${role} ships`);
+    }
+
+    return JSON.parse(row.ships_json) as Ship[];
+  } finally {
+    db.close();
+  }
+};
+
+const cellKey = (cell: Cell): string => `${cell.x}:${cell.y}`;
+
+const findMissCell = (gridSize: number, ships: Ship[]): Cell => {
+  const occupied = new Set(ships.flatMap((ship) => ship.cells.map(cellKey)));
+
+  for (let y = 0; y < gridSize; y += 1) {
+    for (let x = 0; x < gridSize; x += 1) {
+      const cell = { x, y };
+
+      if (!occupied.has(cellKey(cell))) {
+        return cell;
+      }
+    }
+  }
+
+  throw new Error("Unable to find a miss cell");
+};
+
 const run = async (): Promise<void> => {
+  const smokeServer = await startSmokeServer();
+  serverUrl = smokeServer.url;
+
   let clientA: Socket | null = null;
   let clientB: Socket | null = null;
+  let computerClient: Socket | null = null;
+  let intruderClient: Socket | null = null;
 
   try {
     clientA = await connectClient("client A");
@@ -157,8 +399,6 @@ const run = async (): Promise<void> => {
       `expected client B display name John 2, got ${joinedB.player.displayName}`,
     );
 
-    console.log("Display names: John and John 2");
-
     const createUpdate = waitForGameUpdate(clientA, "client A create-game");
 
     clientA.emit("create-game", {
@@ -171,7 +411,6 @@ const run = async (): Promise<void> => {
     const gameId = createdGame.id;
 
     assert(createdGame.status === "waiting", "created game should be waiting");
-    console.log(`Created game ${gameId}`);
 
     const joinUpdateA = waitForGameUpdate(clientA, "client A join-game");
     const joinUpdateB = waitForGameUpdate(clientB, "client B join-game");
@@ -186,7 +425,7 @@ const run = async (): Promise<void> => {
     assert(afterJoinA.game.status === "setup", "client A should see setup");
     assert(afterJoinB.game.status === "setup", "client B should see setup");
 
-    const shipsA = [
+    const shipsA: Ship[] = [
       {
         id: "a-ship-1",
         size: 2,
@@ -196,7 +435,7 @@ const run = async (): Promise<void> => {
         ],
       },
     ];
-    const shipsB = [
+    const shipsB: Ship[] = [
       {
         id: "b-ship-1",
         size: 2,
@@ -227,6 +466,10 @@ const run = async (): Promise<void> => {
     assert(readyA.game.status === "in_progress", "game should be in progress");
     assert(readyB.game.status === "in_progress", "game should be in progress");
     assert(
+      readyA.game.currentTurnPlayerId === joinedA.player.id,
+      "role A should start the game",
+    );
+    assert(
       ownShipsAreVisible(readyA.game, joinedA.player.id),
       "client A should see own ships",
     );
@@ -243,18 +486,15 @@ const run = async (): Promise<void> => {
       "client B should not see A ships",
     );
 
-    const fireAUpdateA = waitForGameUpdate(clientA, "client A fire");
-    const fireAUpdateB = waitForGameUpdate(clientB, "client B sees A fire");
+    const fireHitA = waitForGameUpdate(clientA, "client A fire hit");
+    const fireHitB = waitForGameUpdate(clientB, "client B sees A hit");
 
     clientA.emit("fire", { gameId, x: 0, y: 0 });
 
-    const [afterFireA, afterFireB] = await Promise.all([
-      fireAUpdateA,
-      fireAUpdateB,
-    ]);
+    const [afterHitA, afterHitB] = await Promise.all([fireHitA, fireHitB]);
 
     assert(
-      afterFireA.game.moves.some(
+      afterHitA.game.moves.some(
         (move) =>
           move.playerId === joinedA.player.id &&
           move.x === 0 &&
@@ -264,16 +504,16 @@ const run = async (): Promise<void> => {
       "client A shot should be recorded as hit",
     );
     assert(
-      afterFireB.game.status === "in_progress",
+      afterHitA.game.currentTurnPlayerId === joinedA.player.id,
+      "hit should keep the shooter's turn",
+    );
+    assert(
+      afterHitB.game.status === "in_progress",
       "client B should still see in-progress game",
     );
     assert(
-      opponentShipsAreHidden(afterFireA.game, joinedA.player.id),
+      opponentShipsAreHidden(afterHitA.game, joinedA.player.id),
       "client A should still not see B ships",
-    );
-    assert(
-      opponentShipsAreHidden(afterFireB.game, joinedB.player.id),
-      "client B should still not see A ships",
     );
 
     clientA.disconnect();
@@ -312,8 +552,46 @@ const run = async (): Promise<void> => {
       "restored game should still be in progress",
     );
     assert(
+      restoredGamePayload.game.currentTurnPlayerId === joinedA.player.id,
+      "restored turn should still belong to client A after hit",
+    );
+    assert(
       opponentShipsAreHidden(restoredGamePayload.game, joinedA.player.id),
       "restored client A should not see B ships",
+    );
+
+    const fireMissA = waitForGameUpdate(clientA, "client A fire miss");
+    const fireMissB = waitForGameUpdate(clientB, "client B sees A miss");
+
+    clientA.emit("fire", { gameId, x: 5, y: 5 });
+
+    const [afterMissA] = await Promise.all([fireMissA, fireMissB]);
+
+    assert(
+      afterMissA.game.moves.some(
+        (move) =>
+          move.playerId === joinedA.player.id &&
+          move.x === 5 &&
+          move.y === 5 &&
+          move.result === "miss",
+      ),
+      "client A miss should be recorded",
+    );
+    assert(
+      afterMissA.game.currentTurnPlayerId === joinedB.player.id,
+      "miss should switch the turn to the opponent",
+    );
+
+    const unfinishedReplayError = waitForError(
+      clientA,
+      "unfinished replay rejection",
+    );
+
+    clientA.emit("get-replay", { gameId });
+
+    assert(
+      (await unfinishedReplayError).message.includes("finished"),
+      "unfinished replay should be rejected",
     );
 
     const forfeitUpdateA = waitForGameUpdate(
@@ -369,12 +647,221 @@ const run = async (): Promise<void> => {
       "client B stats should count one loss",
     );
 
+    const replay = (await requestReplay(clientA, gameId, "finished replay"))
+      .replay;
+
+    assert(replay.game.status === "finished", "replay game must be finished");
+    assert(replay.players.length === 2, "replay should contain both players");
+    assert(
+      replay.players.every((replayPlayer) => replayPlayer.ships.length > 0),
+      "replay should include ships after finish",
+    );
+    assert(replay.moves.length >= 2, "replay should contain real moves");
+    assert(
+      replay.moves.some((move) => move.result === "hit") &&
+        replay.moves.some((move) => move.result === "miss"),
+      "replay should include the recorded hit and miss",
+    );
+
+    intruderClient = await connectClient("intruder");
+    await joinPlatform(intruderClient, { name: "Eve" }, "intruder");
+
+    const unauthorizedReplayError = waitForError(
+      intruderClient,
+      "unauthorized replay rejection",
+    );
+
+    intruderClient.emit("get-replay", { gameId });
+
+    assert(
+      (await unauthorizedReplayError).message.includes("not in this game"),
+      "unauthorized replay should be rejected",
+    );
+
+    computerClient = await connectClient("computer client");
+    const joinedComputerHuman = await joinPlatform(
+      computerClient,
+      { name: "Computer Tester" },
+      "computer client",
+    );
+    const computerCreateUpdate = waitForGameUpdate(
+      computerClient,
+      "computer create-game",
+    );
+
+    computerClient.emit("create-game", {
+      gridSize: 15,
+      shipConfig: [{ size: 2, count: 1 }],
+      mode: "computer",
+    });
+
+    const computerSetupGame = (await computerCreateUpdate).game;
+    const computerGameId = computerSetupGame.id;
+    const computerPlayerId = rolePlayerId(computerSetupGame, "B");
+
+    assert(
+      computerSetupGame.mode === "computer",
+      "created game should be computer mode",
+    );
+    assert(
+      computerSetupGame.status === "setup",
+      "computer game should start in setup",
+    );
+    assert(
+      computerSetupGame.players.length === 2,
+      "computer opponent should exist",
+    );
+    assert(
+      computerSetupGame.players.some(
+        (participant) =>
+          participant.role === "B" &&
+          participant.ready &&
+          participant.player.displayName === "Computer",
+      ),
+      "computer opponent should be ready with stable display name",
+    );
+    assert(
+      opponentShipsAreHidden(computerSetupGame, joinedComputerHuman.player.id),
+      "computer ships should be hidden before finish",
+    );
+    const smokeDbPath = smokeServer.dbPath;
+
+    assert(
+      smokeDbPath,
+      "local smoke database path is required for deterministic computer hit",
+    );
+
+    const computerShips = readShipsFromDb(
+      smokeDbPath,
+      computerGameId,
+      "B",
+    );
+    const computerHitCell = computerShips[0].cells[0];
+    const computerMissCell = findMissCell(15, computerShips);
+    const humanShips: Ship[] = [
+      {
+        id: "human-ship-1",
+        size: 2,
+        cells: [
+          { x: 13, y: 14 },
+          { x: 14, y: 14 },
+        ],
+      },
+    ];
+
+    const computerStartUpdate = waitForGameUpdate(
+      computerClient,
+      "computer human place-ships",
+    );
+
+    computerClient.emit("place-ships", {
+      gameId: computerGameId,
+      ships: humanShips,
+    });
+
+    const computerStartedGame = (await computerStartUpdate).game;
+
+    assert(
+      computerStartedGame.status === "in_progress",
+      "computer game should start after human ready",
+    );
+    assert(
+      computerStartedGame.currentTurnPlayerId === joinedComputerHuman.player.id,
+      "human should start first against computer",
+    );
+
+    const humanHitUpdate = waitForGameUpdate(
+      computerClient,
+      "human hit computer",
+    );
+
+    computerClient.emit("fire", {
+      gameId: computerGameId,
+      x: computerHitCell.x,
+      y: computerHitCell.y,
+    });
+
+    const afterHumanHit = (await humanHitUpdate).game;
+
+    assert(
+      afterHumanHit.moves.length === 1 &&
+        afterHumanHit.moves[0].playerId === joinedComputerHuman.player.id &&
+        afterHumanHit.moves[0].result === "hit",
+      "human hit should be recorded without computer response",
+    );
+    assert(
+      afterHumanHit.currentTurnPlayerId === joinedComputerHuman.player.id,
+      "human hit should keep the human turn",
+    );
+    assert(
+      opponentShipsAreHidden(afterHumanHit, joinedComputerHuman.player.id),
+      "computer ships should remain hidden after a non-winning hit",
+    );
+
+    const humanMissUpdate = waitForGameUpdate(
+      computerClient,
+      "human miss triggers computer",
+    );
+
+    computerClient.emit("fire", {
+      gameId: computerGameId,
+      x: computerMissCell.x,
+      y: computerMissCell.y,
+    });
+
+    const afterComputerTurn = (await humanMissUpdate).game;
+    const humanMiss = afterComputerTurn.moves.find(
+      (move) =>
+        move.playerId === joinedComputerHuman.player.id &&
+        move.x === computerMissCell.x &&
+        move.y === computerMissCell.y &&
+        move.result === "miss",
+    );
+
+    assert(humanMiss, "human miss should be recorded");
+
+    const computerMoves = afterComputerTurn.moves.filter(
+      (move) =>
+        move.playerId === computerPlayerId &&
+        move.turnNumber > humanMiss.turnNumber,
+    );
+    const uniqueComputerTargets = new Set(
+      computerMoves.map((move) => `${move.x}:${move.y}`),
+    );
+
+    assert(computerMoves.length > 0, "computer should fire after human miss");
+    assert(
+      uniqueComputerTargets.size === computerMoves.length,
+      "computer should not repeat shot targets",
+    );
+
+    const lastComputerMove = computerMoves[computerMoves.length - 1];
+
+    if (afterComputerTurn.status === "in_progress") {
+      assert(
+        lastComputerMove.result === "miss",
+        "computer should stop its automated sequence after a miss",
+      );
+      assert(
+        afterComputerTurn.currentTurnPlayerId === joinedComputerHuman.player.id,
+        "computer miss should return the turn to the human",
+      );
+    } else {
+      assert(
+        afterComputerTurn.winnerPlayerId === computerPlayerId,
+        "finished computer turn should mean the computer won",
+      );
+    }
+
     console.log(
-      "Socket smoke test passed, including reconnect restore and leave-game forfeit.",
+      "Socket smoke test passed, including PvP, classic turns, reconnect restore, forfeit, computer mode, and replay.",
     );
   } finally {
     clientA?.disconnect();
     clientB?.disconnect();
+    computerClient?.disconnect();
+    intruderClient?.disconnect();
+    await smokeServer.stop();
   }
 };
 

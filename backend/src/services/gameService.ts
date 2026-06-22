@@ -1,5 +1,5 @@
 import { getDatabase } from "../db/database";
-import { randomShot } from "../game/computerPlayer";
+import { chooseComputerShot } from "../game/computerPlayer";
 import {
   areAllShipsSunk,
   getShotResult,
@@ -16,12 +16,13 @@ import type {
   MoveRecord,
   PlayerRole,
   PlayerSummary,
+  ReplayData,
   Ship,
   ShipConfigItem,
   ShotRecord,
   ShotResult,
 } from "../game/types";
-import { createPlayerWithUniqueDisplayName } from "./playerService";
+import { getOrCreateComputerPlayer } from "./playerService";
 import { recordGameResult, recordShot } from "./statsService";
 
 interface GameRow {
@@ -222,7 +223,7 @@ const applyShot = (
   playerId: number,
   x: number,
   y: number,
-): void => {
+): ShotResult => {
   const db = getDatabase();
   const game = getGameRow(gameId);
 
@@ -282,32 +283,46 @@ const applyShot = (
     ).run(playerId, gameId);
 
     recordGameResult(playerId, defender.player_id);
-    return;
+    return result;
   }
+
+  const nextTurnPlayerId =
+    result === "miss" ? defender.player_id : attacker.player_id;
 
   db.prepare<[number, number]>(
     "UPDATE games SET current_turn_player_id = ? WHERE id = ?",
-  ).run(defender.player_id, gameId);
+  ).run(nextTurnPlayerId, gameId);
+
+  return result;
 };
 
 const applyComputerTurnIfNeeded = (gameId: number): void => {
-  const game = getGameRow(gameId);
+  const maxComputerShots = 100;
 
-  if (game.mode !== "computer" || game.status !== "in_progress") {
-    return;
+  for (let count = 0; count < maxComputerShots; count += 1) {
+    const game = getGameRow(gameId);
+
+    if (game.mode !== "computer" || game.status !== "in_progress") {
+      return;
+    }
+
+    const players = getGamePlayers(gameId);
+    const computer = players.find((player) => player.role === "B");
+
+    if (!computer || game.current_turn_player_id !== computer.player_id) {
+      return;
+    }
+
+    const previousShots = parseJson<ShotRecord[]>(computer.shots_json);
+    const shot = chooseComputerShot(game.grid_size, previousShots);
+    const result = applyShot(gameId, computer.player_id, shot.x, shot.y);
+
+    if (result === "miss" || result === "win") {
+      return;
+    }
   }
 
-  const players = getGamePlayers(gameId);
-  const computer = players.find((player) => player.role === "B");
-
-  if (!computer || game.current_turn_player_id !== computer.player_id) {
-    return;
-  }
-
-  const previousShots = parseJson<ShotRecord[]>(computer.shots_json);
-  const shot = randomShot(game.grid_size, previousShots);
-
-  applyShot(gameId, computer.player_id, shot.x, shot.y);
+  throw new Error("Computer turn exceeded the safety shot limit");
 };
 
 const startIfReady = (gameId: number): void => {
@@ -351,7 +366,7 @@ export const createGame = (
     let status: GameStatus = "waiting";
 
     if (mode === "computer") {
-      const computer = createPlayerWithUniqueDisplayName("Computer");
+      const computer = getOrCreateComputerPlayer();
       opponentPlayerId = computer.id;
       status = "setup";
     }
@@ -568,6 +583,55 @@ export const getGameForPlayer = (
     finishedAt: game.finished_at,
     players: participantViews,
     moves,
+  };
+};
+
+export const getReplayData = (
+  gameId: number,
+  playerId: number,
+): ReplayData => {
+  const game = getGameRow(gameId);
+  const players = getGamePlayers(gameId);
+
+  if (!players.some((player) => player.player_id === playerId)) {
+    throw new Error("Player is not in this game");
+  }
+
+  if (game.status !== "finished") {
+    throw new Error("Replay is only available after the game is finished");
+  }
+
+  const displayNameByPlayerId = new Map(
+    players.map((player) => [player.player_id, player.display_name]),
+  );
+
+  return {
+    game: {
+      id: game.id,
+      gridSize: game.grid_size,
+      mode: game.mode,
+      status: "finished",
+      winnerPlayerId: game.winner_player_id,
+      createdAt: game.created_at,
+      startedAt: game.started_at,
+      finishedAt: game.finished_at,
+    },
+    players: players.map((player) => ({
+      playerId: player.player_id,
+      displayName: player.display_name,
+      role: player.role,
+      ships: parseJson<Ship[]>(player.ships_json),
+    })),
+    moves: getMoves(gameId).map((move) => ({
+      id: move.id,
+      turnNumber: move.turnNumber,
+      playerId: move.playerId,
+      displayName: displayNameByPlayerId.get(move.playerId) ?? "Unknown",
+      x: move.x,
+      y: move.y,
+      result: move.result,
+      createdAt: move.createdAt,
+    })),
   };
 };
 

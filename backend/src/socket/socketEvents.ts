@@ -5,6 +5,7 @@ export const clientEvents = {
   placeShips: "place-ships",
   fire: "fire",
   leaveGame: "leave-game",
+  getReplay: "get-replay",
 } as const;
 
 export const serverEvents = {
@@ -12,6 +13,7 @@ export const serverEvents = {
   lobbyUpdated: "lobby-updated",
   gameUpdated: "game-updated",
   errorMessage: "error-message",
+  replayData: "replay-data",
 } as const;
 
 export const gameRoom = (gameId: number): string => `game:${gameId}`;

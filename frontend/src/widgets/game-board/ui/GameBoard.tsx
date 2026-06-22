@@ -5,9 +5,10 @@ interface GameBoardProps {
   gridSize: number
   ships: Ship[]
   shots: BoardShot[]
-  mode: 'own' | 'opponent' | 'placement'
+  mode: 'own' | 'opponent' | 'placement' | 'replay'
   onCellClick?: (cell: CellCoord) => void
   disabled?: boolean
+  highlightedCell?: CellCoord | null
   isCurrentTurn?: boolean
 }
 
@@ -27,17 +28,19 @@ export const GameBoard = ({
   mode,
   onCellClick,
   disabled = false,
+  highlightedCell = null,
   isCurrentTurn = false,
 }: GameBoardProps) => {
   const shipCells = new Set(ships.flatMap((ship) => ship.cells.map(keyFor)))
   const shotByCell = new Map(shots.map((shot) => [keyFor(shot), shot]))
+  const highlightedKey = highlightedCell ? keyFor(highlightedCell) : null
   const clickable = Boolean(onCellClick) && !disabled
-  const columns = `1.5rem repeat(${gridSize}, minmax(0, 1fr))`
+  const columns = `minmax(1.25rem,1.5rem) repeat(${gridSize}, minmax(0, 1fr))`
 
   return (
     <div
       className={clsx(
-        'w-full max-w-[560px] rounded-xl border border-[#c4c7c7] bg-[#edeeef] p-2 shadow-inner',
+        'w-full max-w-[560px] rounded-lg border border-[#c4c7c7] bg-[#edeeef] p-2 shadow-inner',
         disabled && 'opacity-80',
       )}
     >
@@ -60,6 +63,7 @@ export const GameBoard = ({
               const cell = { x, y }
               const shot = shotByCell.get(keyFor(cell))
               const hasShip = shipCells.has(keyFor(cell))
+              const highlighted = highlightedKey === keyFor(cell)
               const markerClassName = clsx(
                 shot?.result === 'miss' &&
                   'h-2 w-2 rounded-full bg-current text-transparent',
@@ -68,17 +72,17 @@ export const GameBoard = ({
                   'flex h-5 w-5 items-center justify-center rounded-full bg-white/70',
               )
               const className = clsx(
-                'flex aspect-square min-h-0 items-center justify-center rounded-[4px] border border-white/80 text-xs font-bold transition-colors',
+                'relative flex aspect-square min-h-0 items-center justify-center rounded-[4px] border border-white/80 text-xs font-bold transition-colors',
                 !hasShip && !shot && 'bg-[#f8f9fa]',
-                hasShip && !shot && mode === 'placement' && 'bg-[#5f8589]',
-                hasShip && !shot && mode !== 'placement' && 'bg-[#7c999c]',
+                hasShip && !shot && mode === 'placement' && 'bg-[#4d7d82]',
+                hasShip && !shot && mode !== 'placement' && 'bg-[#78979a]',
                 shot?.result === 'miss' && 'bg-[#d9ecef] text-[#30727e]',
-                (shot?.result === 'hit' ||
-                  shot?.result === 'sunk' ||
-                  shot?.result === 'win') &&
-                  'bg-[#f7d9de] text-[#b7102a]',
+                shot?.result === 'hit' && 'bg-[#f7d9de] text-[#b7102a]',
+                (shot?.result === 'sunk' || shot?.result === 'win') &&
+                  'bg-[#f1b8c2] text-[#8f071d]',
                 clickable &&
                   'cursor-crosshair hover:bg-[#d9ecef] focus:outline focus:outline-2 focus:outline-[#191c1d]',
+                disabled && 'cursor-not-allowed',
                 mode === 'opponent' &&
                   !clickable &&
                   'cursor-not-allowed bg-[#f3f4f5]',
@@ -89,6 +93,8 @@ export const GameBoard = ({
                   clickable &&
                   isCurrentTurn &&
                   'hover:border-[#191c1d]',
+                highlighted &&
+                  'z-10 ring-2 ring-[#191c1d] ring-offset-1 ring-offset-[#edeeef]',
               )
 
               if (clickable) {

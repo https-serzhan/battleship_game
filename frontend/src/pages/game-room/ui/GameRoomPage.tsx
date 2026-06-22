@@ -27,7 +27,13 @@ const GameRoomPage = ({
 }: GameRoomPageProps) => {
   const ownPlayer = game.players.find((participant) => participant.playerId === player.id)
   const opponent = game.players.find((participant) => participant.playerId !== player.id)
-  const matchup = game.players.map((participant) => participant.displayName).join(' vs ')
+  const opponentDisplayName =
+    game.mode === 'computer' && opponent?.role === 'B'
+      ? 'Computer / A.I. Commander'
+      : opponent?.displayName
+  const matchup = opponent
+    ? [ownPlayer?.displayName, opponentDisplayName].filter(Boolean).join(' vs ')
+    : 'Awaiting opponent'
   const currentTurnName =
     game.players.find((participant) => participant.playerId === game.currentTurnPlayerId)
       ?.displayName ?? 'Nobody'
@@ -57,8 +63,14 @@ const GameRoomPage = ({
       : game.status === 'finished'
         ? 'Finished'
         : canFire
-          ? 'Your turn'
-          : 'Opponent turn'
+          ? 'Your turn — hit grants another shot'
+          : game.mode === 'computer'
+            ? 'Computer is targeting...'
+            : 'Opponent turn'
+  const setupText =
+    game.mode === 'computer'
+      ? 'Place your fleet. Computer fleet is already deployed.'
+      : 'Place every ship and press Ready. The backend validates the final layout before the match can start.'
 
   return (
     <main className="bg-command-grid min-h-screen">
@@ -71,10 +83,15 @@ const GameRoomPage = ({
               </p>
               <div>
                 <h1 className="text-2xl font-semibold tracking-tight text-[#191c1d]">
-                  {matchup || 'Awaiting opponent'}
+                  {matchup}
                 </h1>
                 <p className="text-sm text-[#444748]">
-                  Turn: <span className="font-semibold text-[#191c1d]">{currentTurnName}</span>
+                  Turn:{' '}
+                  <span className="font-semibold text-[#191c1d]">
+                    {game.mode === 'computer' && opponent?.playerId === game.currentTurnPlayerId
+                      ? 'Computer is targeting...'
+                      : currentTurnName}
+                  </span>
                 </p>
               </div>
             </div>
@@ -84,7 +101,7 @@ const GameRoomPage = ({
               </span>
               {game.status === 'finished' ? (
                 <Button variant="outline" onClick={onOpenReplay}>
-                  Replay
+                  View Replay
                 </Button>
               ) : null}
               <Button variant="ghost" onClick={() => onLeaveGame(game.id)}>
@@ -130,6 +147,7 @@ const GameRoomPage = ({
                     shipConfig={game.shipConfig}
                     initialShips={ownPlayer.ships}
                     ready={ownPlayer.ready}
+                    serverError={errorMessage}
                     onPlaceShips={onPlaceShips}
                   />
                 ) : (
@@ -150,7 +168,7 @@ const GameRoomPage = ({
                       Opponent Waters
                     </p>
                     <h2 className="mt-1 text-xl font-semibold text-[#191c1d]">
-                      {opponent.displayName}
+                      {opponentDisplayName}
                     </h2>
                   </div>
                   {game.status === 'in_progress' ? (
@@ -167,7 +185,9 @@ const GameRoomPage = ({
                 />
                 {game.status === 'in_progress' && !canFire ? (
                   <p className="rounded-lg border border-[#c4c7c7] bg-[#f3f4f5] px-3 py-2 text-sm text-[#444748]">
-                    Waiting for opponent fire.
+                    {game.mode === 'computer'
+                      ? 'Computer is targeting...'
+                      : 'Opponent turn'}
                   </p>
                 ) : null}
               </Card>
@@ -208,8 +228,7 @@ const GameRoomPage = ({
                   </h2>
                 </div>
                 <p className="text-sm leading-6 text-[#444748]">
-                  Place every ship and press Ready. The backend validates the final layout
-                  before the match can start.
+                  {setupText}
                 </p>
                 {ownPlayer.ready ? (
                   <div className="rounded-lg border border-[#c4c7c7] bg-[#f3f4f5] px-3 py-2 text-sm text-[#444748]">

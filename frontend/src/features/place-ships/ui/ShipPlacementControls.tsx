@@ -22,6 +22,7 @@ interface ShipPlacementControlsProps {
   shipConfig: ShipConfigItem[]
   initialShips?: Ship[]
   ready?: boolean
+  serverError?: string | null
   onPlaceShips: (gameId: number, ships: Ship[]) => void
 }
 
@@ -63,6 +64,7 @@ export const ShipPlacementControls = ({
   shipConfig,
   initialShips = [],
   ready = false,
+  serverError = null,
   onPlaceShips,
 }: ShipPlacementControlsProps) => {
   const slots = useMemo(() => buildShipSlots(shipConfig), [shipConfig])
@@ -238,9 +240,9 @@ export const ShipPlacementControls = ({
           })}
         </div>
 
-        {localError ? (
+        {localError || serverError ? (
           <div className="rounded-lg border border-[#ba1a1a]/30 bg-white px-3 py-2 text-sm text-[#ba1a1a]">
-            {localError}
+            {localError ?? serverError}
           </div>
         ) : null}
 

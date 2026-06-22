@@ -5,10 +5,15 @@ import { Card } from '../../../shared/ui/Card'
 
 interface GameListProps {
   games: LobbyGame[]
+  currentPlayerId: number
   onJoinGame: (gameId: number) => void
 }
 
-export const GameList = ({ games, onJoinGame }: GameListProps) => (
+export const GameList = ({
+  games,
+  currentPlayerId,
+  onJoinGame,
+}: GameListProps) => (
   <Card className="space-y-4 p-5">
     <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
       <div>
@@ -46,7 +51,11 @@ export const GameList = ({ games, onJoinGame }: GameListProps) => (
                 Mode {game.mode}
               </p>
             </div>
-            <JoinGameButton gameId={game.id} onJoinGame={onJoinGame} />
+            <JoinGameButton
+              gameId={game.id}
+              disabled={game.creatorId === currentPlayerId}
+              onJoinGame={onJoinGame}
+            />
           </div>
         ))}
       </div>
