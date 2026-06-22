@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
+    "render-build": "npm rebuild better-sqlite3 && npm run build",
     "start": "node dist/index.js",
     "smoke": "ts-node src/dev/socketSmokeTest.ts"
   },
